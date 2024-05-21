@@ -1,0 +1,7 @@
+[package]
+name = "the-book"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mime = "0.3.17"
