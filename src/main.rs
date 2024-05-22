@@ -2,7 +2,6 @@ use human_panic::setup_panic;
 use std::{
     env, fs,
     io::{self, stderr, stdout, BufReader, Write},
-    os::windows::fs::FileTypeExt,
 };
 
 use crossterm::{
@@ -12,7 +11,7 @@ use crossterm::{
     Command, ExecutableCommand, QueueableCommand,
 };
 
-use crate::parsers::TxtParser;
+use crate::parsers::{PdfParser, TxtParser};
 
 mod mime_parser;
 mod parsers;
@@ -62,10 +61,14 @@ fn main() -> io::Result<()> {
             let file = fs::File::open(&name);
             match file {
                 Ok(x) => {
-                    let extension = name.split('.').nth(1);
+                    let extension = name.split('.').last();
                     let operator_fn: Box<dyn BookPlugin> = match extension {
                         Some("txt") => Box::new(TxtParser),
-                        Some(_) => todo!(),
+                        Some("pdf") => Box::new(PdfParser),
+                        Some(x) => {
+                            println!("Unsupported file format: {}", x);
+                            todo!()
+                        }
                         None => Box::new(TxtParser),
                     };
                     operator_fn.render(x, window_size);
@@ -73,7 +76,7 @@ fn main() -> io::Result<()> {
                 Err(x) => {
                     stderr().execute(style::PrintStyledContent(
                         get_usage_error(
-                            &("File does not exists, or it can't be opened:   ".to_owned()
+                            &("File does not exist, or it can't be opened:   ".to_owned()
                                 + &x.to_string()),
                         )
                         .red()
