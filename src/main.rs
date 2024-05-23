@@ -1,98 +1,96 @@
+use crate::parsers::{PdfParser, TxtParser};
+use crossterm::{
+    cursor,
+    style::{self, Stylize},
+    terminal::{self, size, Clear, ClearType},
+    ExecutableCommand, QueueableCommand,
+};
 use human_panic::setup_panic;
 use std::{
     env, fs,
     io::{self, stderr, stdout, BufReader, Write},
 };
 
-use crossterm::{
-    cursor,
-    style::{self, Stylize},
-    terminal::{self, size, window_size, Clear, ClearType, WindowSize},
-    Command, ExecutableCommand, QueueableCommand,
-};
-
-use crate::parsers::{PdfParser, TxtParser};
-
-mod mime_parser;
 mod parsers;
+mod text_utils;
 
 trait BookPlugin {
-    fn render(&self, file: fs::File, terminal_size: (u16, u16));
+    fn line_up(&mut self);
+    fn line_down(&mut self);
+    fn move_right(&mut self);
+    fn move_left(&mut self);
+    fn render(&mut self, file: fs::File, terminal_size: (u16, u16)) -> bool;
 }
 
-const _VERSION: &'static str = "0.0.1";
-const STARTUP_MESSAGE: &'static str = "The BOOK APP v v0.0.1 (Simplified BSD License)";
+const VERSION: &str = "0.0.1";
+const STARTUP_MESSAGE: &str = "The BOOK APP v0.0.1 (Simplified BSD License)";
 
 fn get_usage_error(additional_info: &str) -> String {
-    "Usage: book <file_to_read> [OPTIONS]\n".to_string() + additional_info
+    format!("Usage: book <file_to_read> [OPTIONS]\n{}", additional_info)
 }
 
-fn file_exist_and_readable(file: fs::File) -> bool {
+fn file_exist_and_readable(file: &fs::File) -> bool {
     file.metadata()
         .map(|metadata| metadata.is_file())
         .unwrap_or(false)
 }
 
-fn err(error: &str) {
+fn print_error_message(error: &str) {
     eprintln!("\n");
-    stderr().execute(style::PrintStyledContent(error.red().bold()));
-    stderr().flush().expect("Flushing on console sucked !!!");
+    stderr()
+        .execute(style::PrintStyledContent(error.red().bold()))
+        .expect("Can't write error");
+    stderr().flush().expect("Flushing console failed");
 }
 
 fn main() -> io::Result<()> {
-    //Setup panicker
     setup_panic!();
 
-    let window_size = terminal::size().expect("Cannot get terminal window size !!!");
-    let center_horizontaly = |text: &str| (window_size.0 - text.len() as u16) / 2;
+    let window_size = terminal::size().expect("Cannot get terminal window size");
+    let center_horizontally = |text: &str| (window_size.0 - text.len() as u16) / 2;
 
-    //Init console
+    // Initialize console
     stdout()
-        .queue(Clear(ClearType::All))
-        .expect("Can't initiate terminal properly !!!")
-        .queue(cursor::MoveTo(center_horizontaly(STARTUP_MESSAGE), 0))?
-        .queue(style::PrintStyledContent(STARTUP_MESSAGE.bold().cyan()))
-        .expect("Can't write welcome message");
+        .queue(Clear(ClearType::All))?
+        .queue(cursor::MoveTo(center_horizontally(STARTUP_MESSAGE), 0))?
+        .queue(style::PrintStyledContent(STARTUP_MESSAGE.bold().cyan()))?;
     println!("\n");
 
     let file_name = env::args().nth(1);
-    match file_name {
-        Some(name) => {
-            let file = fs::File::open(&name);
-            match file {
-                Ok(x) => {
-                    let extension = name.split('.').last();
-                    let operator_fn: Box<dyn BookPlugin> = match extension {
+    if let Some(name) = file_name {
+        match fs::File::open(&name) {
+            Ok(file) => {
+                if !file_exist_and_readable(&file) {
+                    print_error_message(&get_usage_error(
+                        "File does not exist, or it can't be opened",
+                    ));
+                } else {
+                    let mut extension = name.split('.').last();
+                    if extension.is_some() && extension.unwrap() == name {
+                        extension = None;
+                    }
+                    let mut operator_fn: Box<dyn BookPlugin> = match extension {
                         Some("txt") => Box::new(TxtParser),
-                        Some("pdf") => Box::new(PdfParser),
-                        Some(x) => {
-                            println!("Unsupported file format: {}", x);
+                        Some("pdf") => {
+                            let parser = PdfParser::new((window_size.0, window_size.1 - 2));
+                            Box::new(parser)
+                        }
+                        Some(ext) => {
+                            println!("Unsupported file format: {}", ext);
                             todo!()
                         }
                         None => Box::new(TxtParser),
                     };
-                    operator_fn.render(x, window_size);
+                    operator_fn.render(file, (window_size.0, window_size.1 - 2));
                 }
-                Err(x) => {
-                    stderr().execute(style::PrintStyledContent(
-                        get_usage_error(
-                            &("File does not exist, or it can't be opened:   ".to_owned()
-                                + &x.to_string()),
-                        )
-                        .red()
-                        .bold(),
-                    ))?;
-                }
-            };
+            }
+            Err(_) => print_error_message("File does not exist, or it can't be opened"),
         }
-        None => {
-            stderr().execute(style::PrintStyledContent(
-                get_usage_error("No file to render provided").red().bold(),
-            ))?;
-        }
-    };
+    } else {
+        print_error_message(&get_usage_error("No file to render provided"));
+    }
 
-    stdout().flush().expect("Flushing on console sucked !!! ");
-    stderr().flush().expect("Flushing on console sucked !!! ");
+    stdout().flush().expect("Flushing console failed");
+    stderr().flush().expect("Flushing console failed");
     Ok(())
 }
