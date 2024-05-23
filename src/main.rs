@@ -1,9 +1,10 @@
+#![feature(let_chains)]
 use crate::parsers::{PdfParser, TxtParser};
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEvent, MouseEventKind},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
     style::{self, Stylize},
-    terminal::{self, size, Clear, ClearType},
+    terminal::{self, Clear, ClearType},
     ExecutableCommand, QueueableCommand,
 };
 use human_panic::setup_panic;
@@ -22,11 +23,15 @@ trait BookPlugin {
     fn line_down(&mut self);
     fn move_right(&mut self);
     fn move_left(&mut self);
+    fn toggle_line_numbers(&mut self);
+    fn toggle_line_wrapping(&mut self);
+    fn refresh(&self);
     fn render(&mut self, file: fs::File, terminal_size: (u16, u16)) -> bool;
 }
 
 const VERSION: &str = "0.0.1";
 const STARTUP_MESSAGE: &str = "The BOOK APP v0.0.1 (Simplified BSD License)";
+const FOOTER: &str = "Use [→←↑↓/HJKL] to move. [Q] quit, [N] line numbers, [W] wrap lines";
 
 fn get_usage_error(additional_info: &str) -> String {
     format!("Usage: book <file_to_read> [OPTIONS]\n{}", additional_info)
@@ -64,16 +69,18 @@ fn print_footer(window_size: (u16, u16)) {
     stdout()
         .queue(cursor::MoveTo(0, window_size.1 - 1))
         .expect("Can't move cursor")
-        .queue(style::PrintStyledContent(
-            "Use arrows or HJKL to move around. Press 'q' to quit"
-                .on_white()
-                .black(),
-        ))
-        .expect("Can't write to console");
+        .queue(style::PrintStyledContent(FOOTER.on_white().black()))
+        .expect("Can't write to console")
+        .flush()
+        .expect("Flushing console failed");
 }
 
 fn main() -> io::Result<()> {
     setup_panic!();
+    ctrlc::set_handler(|| {
+        std::process::exit(0);
+    })
+    .expect("Error setting Ctrl-C handler");
 
     let window_size = terminal::size().expect("Cannot get terminal window size");
     let center_horizontally = |text: &str| (window_size.0 - text.len() as u16) / 2;
@@ -81,6 +88,8 @@ fn main() -> io::Result<()> {
     // Initialize console
     stdout()
         .queue(Clear(ClearType::All))?
+        .queue(terminal::SetTitle("The BOOK app"))?
+        .queue(terminal::EnableLineWrap)?
         .queue(cursor::MoveTo(center_horizontally(STARTUP_MESSAGE), 0))?
         .queue(style::PrintStyledContent(STARTUP_MESSAGE.bold().cyan()))?;
     println!("\n");
@@ -118,15 +127,20 @@ fn main() -> io::Result<()> {
                         .unwrap_or(PathBuf::from(name))
                         .to_string_lossy()
                         .to_string();
-                    print_header(system_path, window_size);
-
+                    print_header(system_path.clone(), window_size);
                     let paginator_required =
                         operator_fn.render(file, (window_size.0, window_size.1 - 2));
+
                     if paginator_required {
                         terminal::enable_raw_mode().expect("Failed to enable raw mode");
+                        print_header(system_path, window_size);
+                        operator_fn.refresh();
+                        print_footer(window_size);
                         loop {
-                            if event::poll(std::time::Duration::from_millis(500)).unwrap() {
-                                if let Event::Key(KeyEvent { code, .. }) = event::read().unwrap() {
+                            if event::poll(std::time::Duration::from_millis(700)).unwrap() {
+                                if let Ok(Event::Key(KeyEvent { code, kind, .. })) = event::read()
+                                    && kind == KeyEventKind::Press
+                                {
                                     match code {
                                         KeyCode::Char('q') => break,
                                         KeyCode::Char('j') | KeyCode::Down => {
@@ -149,9 +163,12 @@ fn main() -> io::Result<()> {
                                                 operator_fn.line_down()
                                             }
                                         }
+                                        KeyCode::Char('n') => operator_fn.toggle_line_numbers(),
+                                        KeyCode::Char('w') => operator_fn.toggle_line_wrapping(),
 
                                         _ => (),
                                     }
+                                    operator_fn.refresh();
                                     print_footer(window_size);
                                     stdout().flush().expect("Flushing console failed");
                                 }

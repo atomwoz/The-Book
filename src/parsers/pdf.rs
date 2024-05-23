@@ -1,33 +1,41 @@
-use std::io::{stdout, BufReader, BufWriter, Read, Write};
+use std::io::{stdout, BufReader, Read};
 
 use crossterm::{
     style::{self, Stylize},
     ExecutableCommand,
 };
 
-use crate::pagination::Pagination;
-use crate::{print_error_message, text_utils, BookPlugin};
+use crate::{pagination::Pagination, text_utils::fold};
+use crate::{print_error_message, BookPlugin};
 
 pub struct PdfParser {
     pub lines: Vec<String>,
+    pub lines_wrapped: Vec<String>,
     pub terminal_size: (u16, u16),
     line_len: usize,
     pagination: Pagination,
+    line_wrapping: bool,
 }
 
 impl PdfParser {
     pub fn new(terminal_size: (u16, u16)) -> Self {
         PdfParser {
             lines: Vec::new(),
+            lines_wrapped: Vec::new(),
             terminal_size,
             line_len: 0,
             pagination: Pagination::new(),
+            line_wrapping: false,
         }
     }
 
     pub fn draw(&self) {
-        self.pagination
-            .draw(&self.lines, self.terminal_size, self.line_len);
+        let to_draw = if self.line_wrapping {
+            &self.lines_wrapped
+        } else {
+            &self.lines
+        };
+        self.pagination.draw(&to_draw, self.terminal_size);
     }
 }
 
@@ -49,8 +57,11 @@ impl BookPlugin for PdfParser {
         match result {
             Ok(text) => {
                 let lines = text.lines().collect::<Vec<&str>>();
+                self.lines_wrapped.extend(fold(&lines, terminal_size.0));
                 self.lines.extend(lines.into_iter().map(|x| x.to_string()));
+
                 self.draw();
+
                 self.line_len = self.lines.iter().map(|line| line.len()).max().unwrap_or(0);
                 return self.lines.len() > terminal_size.1 as usize;
             }
@@ -78,6 +89,20 @@ impl BookPlugin for PdfParser {
 
     fn move_left(&mut self) {
         self.pagination.move_left();
+        self.draw();
+    }
+
+    fn refresh(&self) {
+        self.draw();
+    }
+
+    fn toggle_line_numbers(&mut self) {
+        self.pagination.toggle_line_numbers();
+        self.draw();
+    }
+
+    fn toggle_line_wrapping(&mut self) {
+        self.line_wrapping = !self.line_wrapping;
         self.draw();
     }
 }

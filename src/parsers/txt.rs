@@ -5,25 +5,30 @@ use crate::{print_error_message, text_utils, BookPlugin};
 
 pub struct TxtParser {
     pub lines: Vec<String>,
+    pub lines_wrapped: Vec<String>,
     pub terminal_size: (u16, u16),
     pagination: Pagination,
+    line_wrapping: bool,
 }
 
 impl TxtParser {
     pub fn new(terminal_size: (u16, u16)) -> Self {
         TxtParser {
             lines: Vec::new(),
+            lines_wrapped: Vec::new(),
             terminal_size,
             pagination: Pagination::new(),
+            line_wrapping: false,
         }
     }
 
     pub fn draw(&self) {
-        self.pagination.draw(
-            &self.lines,
-            self.terminal_size,
-            self.lines.iter().map(|line| line.len()).max().unwrap_or(0),
-        );
+        let to_draw = if self.line_wrapping {
+            &self.lines_wrapped
+        } else {
+            &self.lines
+        };
+        self.pagination.draw(&to_draw, self.terminal_size);
     }
 }
 
@@ -36,24 +41,15 @@ impl BookPlugin for TxtParser {
             return false;
         }
 
-        match String::from_utf8(buff) {
-            Ok(x) => {
-                let lines: Vec<&str> = x.lines().map(|line| line.trim()).collect();
-                let folded = text_utils::fold(&lines, terminal_size.0);
-                let use_folding = folded.len() <= terminal_size.1 as usize;
+        let x = String::from_utf8_lossy(&buff);
+        let lines: Vec<&str> = x.lines().map(|line| line.trim()).collect();
+        let folded = text_utils::fold(&lines, terminal_size.0);
 
-                self.lines = if use_folding {
-                    folded.iter().map(|x| x.to_string()).collect()
-                } else {
-                    lines.iter().map(|x| x.to_string()).collect()
-                };
+        self.lines = lines.iter().map(|line| line.to_string()).collect();
+        self.lines_wrapped = folded;
 
-                self.draw();
-                return self.lines.len() > terminal_size.1 as usize;
-            }
-            Err(_) => print_error_message("File doesn't contain valid UTF-8 text"),
-        }
-        return false;
+        self.draw();
+        return self.lines.len() > terminal_size.1 as usize;
     }
 
     fn line_up(&mut self) {
@@ -77,6 +73,18 @@ impl BookPlugin for TxtParser {
 
     fn move_left(&mut self) {
         self.pagination.move_left();
+        self.draw();
+    }
+
+    fn toggle_line_numbers(&mut self) {
+        self.pagination.toggle_line_numbers();
+    }
+
+    fn refresh(&self) {
+        self.draw();
+    }
+    fn toggle_line_wrapping(&mut self) {
+        self.line_wrapping = !self.line_wrapping;
         self.draw();
     }
 }
