@@ -1,6 +1,7 @@
 use crate::parsers::{PdfParser, TxtParser};
 use crossterm::{
     cursor,
+    event::{self, Event, KeyCode, KeyEvent, MouseEventKind},
     style::{self, Stylize},
     terminal::{self, size, Clear, ClearType},
     ExecutableCommand, QueueableCommand,
@@ -8,9 +9,11 @@ use crossterm::{
 use human_panic::setup_panic;
 use std::{
     env, fs,
-    io::{self, stderr, stdout, BufReader, Write},
+    io::{self, stderr, stdout, Write},
+    path::PathBuf,
 };
 
+mod pagination;
 mod parsers;
 mod text_utils;
 
@@ -43,6 +46,32 @@ fn print_error_message(error: &str) {
     stderr().flush().expect("Flushing console failed");
 }
 
+fn print_header(filename: String, window_size: (u16, u16)) {
+    stdout()
+        .queue(Clear(ClearType::All))
+        .expect("Can't clear console")
+        .queue(cursor::MoveTo(
+            (window_size.0 - filename.len() as u16) / 2,
+            0,
+        ))
+        .expect("Can't move cursor")
+        .queue(style::PrintStyledContent(filename.on_white().black()))
+        .expect("Can't write to console");
+    println!("\n");
+}
+
+fn print_footer(window_size: (u16, u16)) {
+    stdout()
+        .queue(cursor::MoveTo(0, window_size.1 - 1))
+        .expect("Can't move cursor")
+        .queue(style::PrintStyledContent(
+            "Use arrows or HJKL to move around. Press 'q' to quit"
+                .on_white()
+                .black(),
+        ))
+        .expect("Can't write to console");
+}
+
 fn main() -> io::Result<()> {
     setup_panic!();
 
@@ -70,7 +99,7 @@ fn main() -> io::Result<()> {
                         extension = None;
                     }
                     let mut operator_fn: Box<dyn BookPlugin> = match extension {
-                        Some("txt") => Box::new(TxtParser),
+                        Some("txt") => Box::new(TxtParser::new((window_size.0, window_size.1 - 2))),
                         Some("pdf") => {
                             let parser = PdfParser::new((window_size.0, window_size.1 - 2));
                             Box::new(parser)
@@ -79,9 +108,57 @@ fn main() -> io::Result<()> {
                             println!("Unsupported file format: {}", ext);
                             todo!()
                         }
-                        None => Box::new(TxtParser),
+                        None => Box::new(TxtParser::new((window_size.0, window_size.1 - 2))),
                     };
-                    operator_fn.render(file, (window_size.0, window_size.1 - 2));
+
+                    let mut path = env::current_dir()?;
+                    path.push(&name);
+                    let system_path = path
+                        .canonicalize()
+                        .unwrap_or(PathBuf::from(name))
+                        .to_string_lossy()
+                        .to_string();
+                    print_header(system_path, window_size);
+
+                    let paginator_required =
+                        operator_fn.render(file, (window_size.0, window_size.1 - 2));
+                    if paginator_required {
+                        terminal::enable_raw_mode().expect("Failed to enable raw mode");
+                        loop {
+                            if event::poll(std::time::Duration::from_millis(500)).unwrap() {
+                                if let Event::Key(KeyEvent { code, .. }) = event::read().unwrap() {
+                                    match code {
+                                        KeyCode::Char('q') => break,
+                                        KeyCode::Char('j') | KeyCode::Down => {
+                                            operator_fn.line_down()
+                                        }
+                                        KeyCode::Char('k') | KeyCode::Up => operator_fn.line_up(),
+                                        KeyCode::Char('l') | KeyCode::Right => {
+                                            operator_fn.move_right()
+                                        }
+                                        KeyCode::Char('h') | KeyCode::Left => {
+                                            operator_fn.move_left()
+                                        }
+                                        KeyCode::PageUp => {
+                                            for _ in 0..(window_size.1 / 2) {
+                                                operator_fn.line_up()
+                                            }
+                                        }
+                                        KeyCode::PageDown => {
+                                            for _ in 0..(window_size.1 / 2) {
+                                                operator_fn.line_down()
+                                            }
+                                        }
+
+                                        _ => (),
+                                    }
+                                    print_footer(window_size);
+                                    stdout().flush().expect("Flushing console failed");
+                                }
+                            }
+                        }
+                        terminal::disable_raw_mode().expect("Failed to disable raw mode");
+                    }
                 }
             }
             Err(_) => print_error_message("File does not exist, or it can't be opened"),

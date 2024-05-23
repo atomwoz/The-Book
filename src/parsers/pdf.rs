@@ -1,41 +1,36 @@
 use std::io::{stdout, BufReader, BufWriter, Read, Write};
 
 use crossterm::{
-    cursor,
     style::{self, Stylize},
-    terminal::{self, ClearType},
     ExecutableCommand,
 };
 
+use crate::pagination::Pagination;
 use crate::{print_error_message, text_utils, BookPlugin};
 
 pub struct PdfParser {
     pub lines: Vec<String>,
-    pub current_start_line: usize,
-    pub current_start_column: usize,
     pub terminal_size: (u16, u16),
+    line_len: usize,
+    pagination: Pagination,
 }
+
 impl PdfParser {
     pub fn new(terminal_size: (u16, u16)) -> Self {
         PdfParser {
             lines: Vec::new(),
-            current_start_line: 0,
-            current_start_column: 0,
             terminal_size,
+            line_len: 0,
+            pagination: Pagination::new(),
         }
     }
+
     pub fn draw(&self) {
-        //Draw the lines from currebt_start_line to current_start_line + terminal_size.1
-        let end_line = self.current_start_line + self.terminal_size.1 as usize;
-        let end_line = if end_line > self.lines.len() {
-            self.lines.len()
-        } else {
-            end_line
-        };
-        let lines_to_draw = &self.lines[self.current_start_line..end_line];
-        println!("{}", lines_to_draw.join("\n"));
+        self.pagination
+            .draw(&self.lines, self.terminal_size, self.line_len);
     }
 }
+
 impl BookPlugin for PdfParser {
     fn render(&mut self, file: std::fs::File, terminal_size: (u16, u16)) -> bool {
         let mut buff = Vec::new();
@@ -51,16 +46,12 @@ impl BookPlugin for PdfParser {
             .unwrap();
 
         let result = pdf_extract::extract_text_from_mem(&buff);
-        stdout()
-            .execute(cursor::MoveTo(1, 0))
-            .unwrap()
-            .execute(terminal::Clear(ClearType::All))
-            .unwrap();
         match result {
             Ok(text) => {
                 let lines = text.lines().collect::<Vec<&str>>();
                 self.lines.extend(lines.into_iter().map(|x| x.to_string()));
                 self.draw();
+                self.line_len = self.lines.iter().map(|line| line.len()).max().unwrap_or(0);
                 return self.lines.len() > terminal_size.1 as usize;
             }
             Err(_) => print_error_message("There was problem reading file, please try again"),
@@ -69,18 +60,24 @@ impl BookPlugin for PdfParser {
     }
 
     fn line_up(&mut self) {
-        todo!()
+        self.pagination.line_up();
+        self.draw();
     }
 
     fn line_down(&mut self) {
-        todo!()
+        self.pagination
+            .line_down(self.lines.len(), self.terminal_size);
+        self.draw();
     }
 
     fn move_right(&mut self) {
-        todo!()
+        self.pagination
+            .move_right(self.line_len, self.terminal_size);
+        self.draw();
     }
 
     fn move_left(&mut self) {
-        todo!()
+        self.pagination.move_left();
+        self.draw();
     }
 }
